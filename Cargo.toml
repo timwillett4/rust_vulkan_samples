@@ -1,0 +1,27 @@
+[package]
+name = "vulkan_samples"
+version = "0.1.0"
+authors = ["twillett <twillett@qti.qualcomm.com>"]
+edition = "2018"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+winit = "0.22.2"
+vulkano = "0.19"
+log = "0.4.11"
+
+[target.'cfg(not(target_os = "android"))'.dependencies]
+log4rs = "0.13.0"
+
+[target.'cfg(target_os = "android")'.dependencies]
+# @TODO - switch to stable ndk-glue crate
+# ndk-glue = "0.1.0" does not seem to work
+# so just grab latest from github for now
+ndk-glue = { git = "https://github.com/rust-windowing/android-ndk-rs" }
+android_logger = "0.9.0"
+
+[[example]]
+name = "simple_triangle"
+[target.'cfg(target_os = "android")'.example]
+crate-type = ["cdylib"]
