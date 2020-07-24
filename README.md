@@ -1,5 +1,7 @@
 # Rust Vulkan Samples
-A collection of cross-platform Vulkan samples written using the Rust programming language
+A collection of cross-platform Vulkan samples written using the Rust programming language.
+
+Currently supports Windows/OSX/Linux and Android.
 
 # Setup
 
@@ -11,13 +13,13 @@ A collection of cross-platform Vulkan samples written using the Rust programming
 ## __Android Setup__
 The following steps are required to build for android
 ### Prerequisites
-* Android NDK:
+Android NDK:
 
   * [Standalone NDK](https://developer.android.com/ndk/downloads)
 
   * [Packaged With Android Studio](https://developer.android.com/studio#downloads)
-
-    chocolatey: choco install android-ndk
+ <!-- -->
+    Chocolatey: choco install android-ndk
 
 ### Add Android Targets
 
@@ -50,7 +52,7 @@ If you get errors when signing package you likely need to update jdk to latest v
 
 [JDK Installation](https://www.oracle.com/sa/java/technologies/javase-downloads.html)
 
-     chocolatey: choco install openjdk
+     Chocolatey: choco install openjdk
 ## __Clippy (optional)__
 Clippy is a helpful rust liner that can be installed as follows:
 <!-- -->
@@ -58,18 +60,18 @@ Clippy is a helpful rust liner that can be installed as follows:
     (use rustup component list to see up to date name)
 
 # __Build Steps__
-#
+## Windows/OSX/Linux
 
     cargo build --example [example_name]
 <!-- -->
     cargo run --example [example_name]
-#
+
 ## Android
     cargo apk build --example [example_name]
 <!-- -->
     cargo apk run --example [example_name]
 # Notes
 * It is not necesarry to do build and run steps seperately
-* 'example_name' can be any one of the sub_directories inside of root example folder
+* 'example_name' can be any one of the root file names inside of root example folder
 
 
