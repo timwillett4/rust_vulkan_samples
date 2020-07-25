@@ -13,13 +13,17 @@ Currently supports Windows/OSX/Linux and Android.
 ## __Android Setup__
 The following steps are required to build for android
 ### Prerequisites
-Android NDK:
+Android NDK/SDK:
 
   * [Standalone NDK](https://developer.android.com/ndk/downloads)
 
-  * [Packaged With Android Studio](https://developer.android.com/studio#downloads)
+  * [SDK Command line tools or SDK/NDoco install android-sdk Packaged With Android Studio](https://developer.android.com/studio#downloads)
+
+  * After installing SDK run 'sdk manager' from the bin folder and install latest build tools
+
+  * Ensure that ANDROID_NDK_ROOT and ANDROID_SDK_ROOT and ANDROID_HOME (same as ANDROID_SDK_ROOT) are set after you installation
  <!-- -->
-    Chocolatey: choco install android-ndk
+    Chocolatey: choco install android-ndk android-sdk
 
 ### Add Android Targets
 
@@ -56,7 +60,7 @@ If you get errors when signing package you likely need to update jdk to latest v
 ## __Clippy (optional)__
 Clippy is a helpful rust liner that can be installed as follows:
 <!-- -->
-    'rustup add component clippy-preview'
+    'rustup component add clippy-preview'
     (use rustup component list to see up to date name)
 
 # __Build Steps__
