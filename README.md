@@ -10,6 +10,17 @@ Currently supports Windows/OSX/Linux and Android.
 <!-- -->
     Chocolatey : choco install rustup --pre
 
+## __Additional requirements for building dependencies__
+* Python
+* CMake
+* Ninja
+* Git
+<!-- -->
+    Chocolatey : choco install python --pre
+                 choco install cmake
+                 choco install ninja
+                 choco install git
+
 ## __Android Setup__
 The following steps are required to build for android
 ### Prerequisites
