@@ -1,5 +1,5 @@
-pub fn init_logger() {
-    target_logger::init_logger();
+pub fn init() {
+    target_logger::init();
 }
 
 #[cfg(not(target_os="android"))]
@@ -11,7 +11,7 @@ mod target_logger {
     use log4rs::encode::pattern::PatternEncoder;
     use log4rs::config::{Appender, Config, Root};
 
-    pub fn init_logger() {
+    pub fn init() {
 
         let logfile = FileAppender::builder()
             .encoder(Box::new(PatternEncoder::new("{l} - {m}\n")))
