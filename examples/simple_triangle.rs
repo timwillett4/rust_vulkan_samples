@@ -92,7 +92,6 @@ fn init_vulkan() {
 
     let queue = queues.next().expect("couldn't fin a graphics queues");
 
-
     let image = StorageImage::new(device.clone(), Dimensions::Dim2d { width: 1024, height: 1024 },
                               Format::R8G8B8A8Unorm, Some(queue.family())).unwrap();
 
@@ -113,7 +112,6 @@ fn init_vulkan() {
 
     let vs = vs::Shader::load(device.clone()).expect("failed to create shader module");
     let fs = fs::Shader::load(device.clone()).expect("failed to create shader module");
-
 
 
     let framebuffer = Arc::new(Framebuffer::start(render_pass.clone())
@@ -173,5 +171,7 @@ fn init_vulkan() {
 
     let buffer_content = buf.read().unwrap();
     //image.save("triangle.png").unwrap();
+
+    let caps = surface.
 }
 
