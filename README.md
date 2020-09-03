@@ -21,6 +21,10 @@ Currently supports Windows/OSX/Linux and Android.
                  choco install ninja
                  choco install git
 
+<!-- -->
+## _Required environment variables_
+* CMAKE (set to path of cmake executable)
+
 ## __Android Setup__
 The following steps are required to build for android
 ### Prerequisites
@@ -32,9 +36,13 @@ Android NDK/SDK:
 
   * After installing SDK run 'sdk manager' from the bin folder and install latest build tools
 
-  * Ensure that ANDROID_NDK_ROOT and ANDROID_SDK_ROOT and ANDROID_HOME (same as ANDROID_SDK_ROOT) are set after you installation
- <!-- -->
+<!-- -->
     Chocolatey: choco install android-ndk android-sdk
+<!-- -->
+## _Required environment variables_
+  * ANDROID_NDK_ROOT
+  * ANDROID_SDK_ROOT
+  * ANDROID_HOME (same as ANDROID_SDK_ROOT)
 
 ### Add Android Targets
 

@@ -1,177 +1,236 @@
 #[macro_use] extern crate log;
 
-use vulkan_samples::app;
-
+use vulkan_samples::vulkan_app::{App, AppEventHandler, AppEventHandlerFactory, UpdateFrequency};
+use vulkan_samples::vulkan_app_builder::single_graphics_queue::SingleGraphicsQueueAppBuilder;
 use std::sync::Arc;
 
-use vulkano::instance::Instance;
-use vulkano::instance::InstanceExtensions;
-use vulkano::instance::PhysicalDevice;
-use vulkano::instance::QueueFamily;
-use vulkano::device::Device;
-use vulkano::device::DeviceExtensions;
-use vulkano::device::Features;
+use vulkano::device::{Device, Queue};
 use vulkano::format::Format;
-use vulkano::image::Dimensions;
-use vulkano::image::StorageImage;
-use vulkano::command_buffer::AutoCommandBufferBuilder;
-use vulkano::pipeline::GraphicsPipeline;
-use vulkano::framebuffer::Subpass;
-use vulkano::framebuffer::Framebuffer;
-use vulkano::command_buffer::DynamicState;
-use vulkano::pipeline::viewport::Viewport;
-use vulkano::buffer::BufferUsage;
-use vulkano::buffer::CpuAccessibleBuffer;
-
-mod vs {
-    vulkano_shaders::shader!{
-        ty: "vertex",
-        src: "
-#version 450
-
-layout(location = 0) in vec2 position;
-
-void main() {
-    gl_Position = vec4(position, 0.0, 1.0);
-}"
-    }
-}
-
-mod fs {
-    vulkano_shaders::shader!{
-        ty: "fragment",
-        src: "
-#version 450
-
-layout(location = 0) out vec4 f_color;
-
-void main() {
-    f_color = vec4(1.0, 0.0, 0.0, 1.0);
-}"
-    }
-}
-
-#[derive(Default, Copy, Clone)]
-struct Vertex {
-    position: [f32; 2],
-}
-
-vulkano::impl_vertex!(Vertex, position);
+use vulkano::pipeline::{GraphicsPipeline, GraphicsPipelineAbstract};
+use vulkano::framebuffer::{Subpass, FramebufferAbstract, RenderPassAbstract};
+use vulkano::command_buffer::{AutoCommandBufferBuilder, CommandBuffer, DynamicState};
+use vulkano::command_buffer::pool::standard::StandardCommandPoolAlloc;
+use vulkano::buffer::{BufferUsage, CpuAccessibleBuffer, BufferAccess};
 
 #[cfg_attr(target_os = "android", ndk_glue::main(backtrace))]
 fn main() {
 
-    let app = app::App {
-        update_frequency : app::UpdateFrequency::Continuous
+    let app = App::new(
+        UpdateFrequency::Continuous,
+        &SingleGraphicsQueueAppBuilder::new(),
+        &SimpleTriangleEventHandlerFactory::new(),
+    );
+
+
+    // @TODO - this should be in app common code
+
+    let mut dynamic_state = DynamicState {
+        line_width: None,
+        viewports: None,
+        scissors: None,
+        compare_mask: None,
+        write_mask: None,
+        reference: None,
     };
 
+    //let mut framebuffers = app.create_frame_buffers(render_pass, &mut dynamic_state);
+    // this should be render function
+
+   /* let command_buffer = create_command_buffer(
+                            device,
+                            graphics_queue,
+                            graphics_pipeline,
+                            framebuffer,
+                            &mut dynamic_state,
+                        ); */
     app.run()
 }
 
-fn init_vulkan() {
-
-    debug!("Initing Vulkan");
-
-    let instance = {
-        let extensions = vulkano_win::required_extensions();
-        Instance::new(None, &extensions, None).expect("failed to create Vulkan instance")
-    };
-
-    let (physical_device, queue_family) : (PhysicalDevice, QueueFamily) = PhysicalDevice::enumerate(&instance)
-        .find_map(|physical_device| -> Option<(PhysicalDevice, QueueFamily)> {
-            match physical_device.queue_families().find(|queue_family| -> bool { queue_family.supports_graphics() }) {
-                Some(queue_family) => Some((physical_device, queue_family)),
-                None => None,
-            }}).expect("couldn't find a graphical queue family");
-
-
-    let (device, mut queues) = {
-        Device::new(physical_device, &Features::none(), &DeviceExtensions::none(),
-                    [(queue_family, 0.5)].iter().cloned()).expect("failed to create logical device")
-    };
-
-    let queue = queues.next().expect("couldn't fin a graphics queues");
-
-    let image = StorageImage::new(device.clone(), Dimensions::Dim2d { width: 1024, height: 1024 },
-                              Format::R8G8B8A8Unorm, Some(queue.family())).unwrap();
-
-    let render_pass = Arc::new(vulkano::single_pass_renderpass!(device.clone(),
-        attachments: {
-            color: {
-                load: Clear,
-                store: Store,
-                format: Format::R8G8B8A8Unorm,
-                samples: 1,
-            }
-        },
-        pass: {
-            color: [color],
-            depth_stencil: {}
-        }
-    ).unwrap());
-
-    let vs = vs::Shader::load(device.clone()).expect("failed to create shader module");
-    let fs = fs::Shader::load(device.clone()).expect("failed to create shader module");
-
-
-    let framebuffer = Arc::new(Framebuffer::start(render_pass.clone())
-        .add(image.clone()).unwrap()
-        .build().unwrap());
-
-    let pipeline = Arc::new(GraphicsPipeline::start()
-        .vertex_input_single_buffer::<Vertex>()
-        .vertex_shader(vs.main_entry_point(), ())
-        .viewports_dynamic_scissors_irrelevant(1)
-        .fragment_shader(fs.main_entry_point(), ())
-        .render_pass(Subpass::from(render_pass.clone(), 0).unwrap())
-        .build(device.clone())
-        .unwrap());
-
-    let dynamic_state = DynamicState {
-        viewports: Some(vec![Viewport {
-            origin: [0.0, 0.0],
-            dimensions: [1024.0, 1024.0],
-            depth_range: 0.0 .. 1.0,
-        }]),
-        .. DynamicState::none()
-    };
-
-    let vertex1 = Vertex { position: [-0.5, -0.5] };
-    let vertex2 = Vertex { position: [ 0.0,  0.5] };
-    let vertex3 = Vertex { position: [ 0.5, -0.25] };
-
-    let vertex_buffer = CpuAccessibleBuffer::from_iter(device.clone(), BufferUsage::all(), false,
-                                                   vec![vertex1, vertex2, vertex3].into_iter()).unwrap();
-
-    //let image = ImageBuffer::<Rgba<u8>, _>::from_raw(1024, 1024, &buffer_content[..]).unwrap();
-
-    let buf = CpuAccessibleBuffer::from_iter(device.clone(), BufferUsage::all(), false,
-                                            (0 .. 1024 * 1024 * 4).map(|_| 0u8))
-                                            .expect("failed to create buffer");
-
-    let mut builder = AutoCommandBufferBuilder::primary_one_time_submit(device.clone(), queue.family()).unwrap();
-
-    builder
-        .begin_render_pass(framebuffer.clone(), false, vec![[0.0, 0.0, 1.0, 1.0].into()])
-        .unwrap()
-
-        .draw(pipeline.clone(), &dynamic_state, vertex_buffer.clone(), (), ())
-        .unwrap()
-
-        .end_render_pass()
-        .unwrap()
-        .copy_image_to_buffer(image.clone(), buf.clone())
-        .unwrap();
-
-    let command_buffer = builder.build().unwrap();
-
-    let finished = command_buffer.execute(queue.clone()).unwrap();
-    finished.then_signal_fence_and_flush().unwrap()
-        .wait(None).unwrap();
-
-    let buffer_content = buf.read().unwrap();
-    //image.save("triangle.png").unwrap();
-
-    let caps = surface.
+#[derive(Default, Debug, Clone)]
+struct Vertex {
+    position: [f32; 2],
 }
 
+struct SimpleTriangleEventHandlerFactory{}
+
+struct SimpleTriangleEventHandler{
+    device: Arc<Device>,
+    graphics_queue: Arc<Queue>,
+    vertex_buffer: Arc<dyn BufferAccess + Send + Sync>,
+    render_pass: Arc<dyn RenderPassAbstract + Send + Sync>,
+    graphics_pipeline: Arc<dyn GraphicsPipelineAbstract + Send + Sync>,
+}
+
+impl AppEventHandlerFactory for SimpleTriangleEventHandlerFactory {
+
+    fn create_event_handler(
+        &self,
+        device: Arc<Device>,
+        queues: &Vec<Arc<Queue>>,
+        swapchain_format: Format,
+    ) -> Box<dyn AppEventHandler> {
+
+        let render_pass = SimpleTriangleEventHandlerFactory::create_renderpass(&device, swapchain_format);
+        let graphics_pipeline = SimpleTriangleEventHandlerFactory::create_pipeline(&device, render_pass.clone());
+        let vertex_buffer = SimpleTriangleEventHandlerFactory::create_vertex_buffer(&device);
+
+        let graphics_queue = queues[0].clone();
+
+        Box::new(SimpleTriangleEventHandler{
+            device,
+            graphics_queue,
+            vertex_buffer,
+            render_pass,
+            graphics_pipeline,
+        })
+    }
+}
+
+impl SimpleTriangleEventHandlerFactory {
+
+    fn new() -> SimpleTriangleEventHandlerFactory {
+
+        SimpleTriangleEventHandlerFactory{}
+    }
+
+    fn create_renderpass(
+        device: &Arc<Device>,
+        format: Format,
+    ) -> Arc<dyn RenderPassAbstract + Send + Sync> {
+
+        Arc::new(
+            vulkano::single_pass_renderpass!(
+                device.clone(),
+                attachments: {
+
+                    color: {
+                        load: Clear,
+                        store: Store,
+                        format: format,
+                        samples: 1,
+                    }
+                },
+
+                pass: {
+                    color: [color],
+                    depth_stencil: {}
+                }
+            )
+            .unwrap()
+        )
+    }
+
+    fn create_pipeline(
+        device: &Arc<Device>,
+        render_pass: Arc<dyn RenderPassAbstract + Send + Sync>
+    ) -> Arc<dyn GraphicsPipelineAbstract + Send + Sync> {
+
+        mod vs {
+            vulkano_shaders::shader!{
+                ty: "vertex",
+                src: "
+                    #version 450
+
+                    layout(location = 0) in vec2 position;
+
+                    void main() {
+                        gl_Position = vec4(position, 0.0, 1.0);
+                    }
+                "
+            }
+        }
+
+        mod fs {
+            vulkano_shaders::shader!{
+                ty: "fragment",
+                src: "
+                    #version 450
+
+                    layout(location = 0) out vec4 f_color;
+
+                    void main() {
+                        f_color = vec4(1.0, 0.0, 0.0, 1.0);
+                    }
+                "
+            }
+        }
+
+        let vs = vs::Shader::load(device.clone()).expect("failed to create shader module");
+        let fs = fs::Shader::load(device.clone()).expect("failed to create shader module");
+
+        Arc::new(
+            GraphicsPipeline::start()
+                .vertex_input_single_buffer::<Vertex>()
+                .vertex_shader(vs.main_entry_point(), ())
+                .viewports_dynamic_scissors_irrelevant(1)
+                .fragment_shader(fs.main_entry_point(), ())
+                .render_pass(Subpass::from(render_pass, 0).unwrap())
+                .build(device.clone())
+                .unwrap()
+        )
+    }
+
+    fn create_vertex_buffer(device: &Arc<Device>) -> Arc<dyn BufferAccess + Send + Sync> {
+
+        vulkano::impl_vertex!(Vertex, position);
+
+        CpuAccessibleBuffer::from_iter(
+            device.clone(),
+            BufferUsage::all(),
+            false,
+            [
+                Vertex { position: [-0.5, -0.25] },
+                Vertex { position: [ 0.0,  0.5] },
+                Vertex { position: [ 0.25, -0.1] },
+            ]
+            .iter()
+            .cloned(),
+        )
+        .unwrap()
+    }
+}
+
+impl AppEventHandler for SimpleTriangleEventHandler {
+
+    fn update(&self) {
+
+    }
+
+    fn render(&self) {
+
+    }
+}
+
+impl SimpleTriangleEventHandler {
+
+    fn create_command_buffer(
+        &self,
+        framebuffer: Arc<dyn FramebufferAbstract + Send + Sync>,
+        dynamic_state: &mut DynamicState,
+    ) -> impl CommandBuffer<PoolAlloc = StandardCommandPoolAlloc> {
+
+        let clear_values = vec![[0.0, 0.0, 1.0, 1.0].into()];
+
+        let mut builder = AutoCommandBufferBuilder::primary_one_time_submit(
+            self.device.clone(),
+            self.graphics_queue.family(),
+        )
+        .unwrap();
+
+        builder.
+            begin_render_pass(framebuffer, false, clear_values)
+            .unwrap()
+            .draw(
+                self.graphics_pipeline.clone(),
+                &dynamic_state,
+                vec![self.vertex_buffer.clone()],
+                (),
+                (),
+            )
+            .unwrap()
+            .end_render_pass()
+            .unwrap();
+
+        builder.build().unwrap()
+    }
+}
