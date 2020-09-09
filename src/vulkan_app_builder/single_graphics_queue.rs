@@ -1,42 +1,72 @@
-use crate::vulkan_app::{VulkanApp, VulkanAppBuilder};
+use crate::vulkan_app::{
+    DeviceFactory,
+    InstanceFactory,
+    SwapchainFactory
+};
 
 use std::sync::Arc;
 
-use vulkano::instance::{Instance, PhysicalDevice, QueueFamily};
-use vulkano::swapchain::{
-    ColorSpace,
-    FullscreenExclusive,
-    PresentMode,
-    Surface,
-    SurfaceTransform,
-    Swapchain,
-};
-use vulkano::image::ImageUsage;
-use vulkano::device::{Device, Features};
 use winit::window::Window;
 
-pub struct SingleGraphicsQueueAppBuilder{}
+use vulkano::{
+    device::{
+        Device,
+        Features,
+        Queue
+    },
+    image::{
+        ImageUsage,
+        SwapchainImage
+    },
+    instance::{
+        Instance,
+        PhysicalDevice,
+        QueueFamily
+    },
+    swapchain::{
+        ColorSpace,
+        FullscreenExclusive,
+        PresentMode,
+        Surface,
+        SurfaceTransform,
+        Swapchain,
+    },
+};
 
-impl SingleGraphicsQueueAppBuilder {
+pub struct DefaultInstanceFactory{}
 
-    pub fn new() -> SingleGraphicsQueueAppBuilder {
-        SingleGraphicsQueueAppBuilder{}
+impl DefaultInstanceFactory { pub fn new() -> Box<dyn InstanceFactory> {
+        Box::new(DefaultInstanceFactory{})
     }
 }
 
-impl VulkanAppBuilder for SingleGraphicsQueueAppBuilder {
+impl InstanceFactory for DefaultInstanceFactory {
 
+    // @TODO should take app info, extensions, layers
     fn create_instance(&self) -> Arc<Instance> {
 
         let extensions = vulkano_win::required_extensions();
+
         Instance::new(None, &extensions, None).expect("failed to create Vulkan Instance")
     }
+}
 
-    fn build(
+pub struct SingleGraphicsQueueDeviceFactory{}
+
+impl SingleGraphicsQueueDeviceFactory {
+
+    pub fn new() -> Box<dyn DeviceFactory> {
+        Box::new(SingleGraphicsQueueDeviceFactory{})
+    }
+}
+
+impl DeviceFactory for SingleGraphicsQueueDeviceFactory {
+
+    fn create_device(
         &self,
         instance: Arc<Instance>,
         surface: Arc<Surface<Window>>,
-    ) -> VulkanApp {
+    ) -> (Arc<Device>, Vec<Arc<Queue>>) {
 
         let (physical_device, queue_family) = {
             PhysicalDevice::enumerate(&instance).find_map(
@@ -61,7 +91,7 @@ impl VulkanAppBuilder for SingleGraphicsQueueAppBuilder {
             .. vulkano::device::DeviceExtensions::none()
         };
 
-        let (device, mut queues) = Device::new(
+        let (device, queues) = Device::new(
             physical_device,
             &Features::none(),
             &device_extensions,
@@ -69,41 +99,49 @@ impl VulkanAppBuilder for SingleGraphicsQueueAppBuilder {
         )
         .expect("failed to create logical device");
 
-        let (swapchain, swapchain_images) = {
-            let caps = surface.capabilities(physical_device).expect("failsd to get surface capabilties");
-
-            let alpha = caps.supported_composite_alpha.iter().next().unwrap();
-            let format = caps.supported_formats[0].0;
-            let dimensions = surface.window().inner_size().into();
-
-            let queue = queues.next().expect("couldn't find a graphics queues");
-
-            Swapchain::new(
-                device.clone(),
-                surface.clone(),
-                caps.min_image_count,
-                format,
-                dimensions,
-                1,
-                ImageUsage::color_attachment(),
-                &queue,
-                SurfaceTransform::Identity,
-                alpha,
-                PresentMode::Fifo,
-                FullscreenExclusive::Default,
-                true,
-                ColorSpace::SrgbNonLinear,
-            )
-            .expect("failed to create swapchain")
-        };
-
         let queues = queues.collect::<Vec<_>>();
 
-        VulkanApp {
-            device,
-            queues,
-            swapchain,
-            swapchain_images,
-        }
+        (device, queues)
+    }
+}
+
+pub struct DefaultSwapchainFactory{}
+
+impl DefaultSwapchainFactory { pub fn new() -> Box<dyn SwapchainFactory> {
+        Box::new(DefaultSwapchainFactory{})
+    }
+}
+
+impl SwapchainFactory for DefaultSwapchainFactory {
+    fn create_swapchain(
+        &self,
+        device: Arc<Device>,
+        queue: &Arc<Queue>,
+        surface: Arc<Surface<Window>>
+    ) -> (Arc<Swapchain<Window>>, Vec<Arc<SwapchainImage<Window>>>) {
+
+        let caps = surface.capabilities(device.physical_device()).expect("failsd to get surface capabilties");
+
+        let alpha = caps.supported_composite_alpha.iter().next().unwrap();
+        let format = caps.supported_formats[0].0;
+        let dimensions = surface.window().inner_size().into();
+
+        Swapchain::new(
+            device.clone(),
+            surface.clone(),
+            caps.min_image_count,
+            format,
+            dimensions,
+            1,
+            ImageUsage::color_attachment(),
+            queue,
+            SurfaceTransform::Identity,
+            alpha,
+            PresentMode::Fifo,
+            FullscreenExclusive::Default,
+            true,
+            ColorSpace::SrgbNonLinear,
+        )
+        .expect("failed to create swapchain")
     }
 }
