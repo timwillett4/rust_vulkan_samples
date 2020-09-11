@@ -1,17 +1,17 @@
-#[macro_use] extern crate log;
-
-use vulkan_samples::vulkan_app::{
-    AppEventHandler,
-    AppEventHandlerFactory,
-    UpdateFrequency,
-    VulkanApp,
-    SwapchainFactory,
-};
-
-use vulkan_samples::vulkan_app_builder::single_graphics_queue::{
-    DefaultInstanceFactory,
-    DefaultSwapchainFactory,
-    SingleGraphicsQueueDeviceFactory,
+use vulkan_samples::{
+        app::{
+            App,
+            AppEventHandlerFactory,
+            AppEventHandler,
+            UpdateFrequency,
+        },
+        vulkan_app::{
+            DefaultInstanceFactory,
+            DefaultSwapchainFactory,
+            RenderState,
+            VulkanApp,
+        },
+        vulkan_device_factories::single_graphics_queue::SingleGraphicsQueueDeviceFactory,
 };
 
 use std::sync::Arc;
@@ -45,57 +45,37 @@ use vulkano::{
         GraphicsPipeline,
         GraphicsPipelineAbstract,
     },
-    swapchain::{
-        SwapchainAcquireFuture,
-        Surface,
-        Swapchain,
-    },
     sync,
     sync::{FlushError, GpuFuture},
 };
 
 #[cfg_attr(target_os = "android", ndk_glue::main(backtrace))]
 fn main() {
-
-    let app = VulkanApp::new(
+    let app = App::new(
         UpdateFrequency::Continuous,
-        DefaultInstanceFactory::new(),
-        SingleGraphicsQueueDeviceFactory::new(),
         SimpleTriangleEventHandlerFactory::new(),
     );
 
-    app.run()
+    app.run();
 }
 
-#[derive(Default, Debug, Clone)]
-struct Vertex {
-    position: [f32; 2],
-}
-
-struct SimpleTriangleEventHandlerFactory{}
-
-struct SimpleTriangleEventHandler{
-    device: Arc<Device>,
-    surface: Arc<Surface<Window>>,
-    graphics_queue: Arc<Queue>,
-    vertex_buffer: Arc<dyn BufferAccess + Send + Sync>,
-    render_pass: Arc<dyn RenderPassAbstract + Send + Sync>,
-    graphics_pipeline: Arc<dyn GraphicsPipelineAbstract + Send + Sync>,
-    previous_frame_end: Option<Box<dyn GpuFuture>>,
-    swapchain_factory: Box<dyn SwapchainFactory>,
-}
+struct SimpleTriangleEventHandlerFactory {}
 
 impl AppEventHandlerFactory for SimpleTriangleEventHandlerFactory {
 
-    fn create_event_handler(
-        &self,
-        device: Arc<Device>,
-        queues: &Vec<Arc<Queue>>,
-        surface: Arc<Surface<Window>>,
-    ) -> Box<dyn AppEventHandler> {
+    fn create_event_handler(&self, window: Window) -> Box<dyn AppEventHandler> {
+        let (vulkan_app, surface) = VulkanApp::new(
+            DefaultInstanceFactory::new(),
+            SingleGraphicsQueueDeviceFactory::new(),
+            window,
+        );
+
+        let device = vulkan_app.device;
+        // @TODO - this should actually check for first queue that supports graphics
+        let graphics_queue = vulkan_app.queues[0].clone();
 
         let surface_format = {
-            let caps = surface.capabilities(device.physical_device()).expect("failsd to get surface capabilties");
+            let caps = surface.capabilities(device.physical_device()).expect("failed to get surface capabilties");
 
             caps.supported_formats[0].0
         };
@@ -106,21 +86,31 @@ impl AppEventHandlerFactory for SimpleTriangleEventHandlerFactory {
 
         let vertex_buffer = SimpleTriangleEventHandlerFactory::create_vertex_buffer(&device);
 
-        let graphics_queue = queues[0].clone();
-
         let previous_frame_end = Some(sync::now(device.clone()).boxed());
+
+        // @TODO - this perhaps needs to be some type of generalized interface?
+        let render_state = RenderState::new(
+            device.clone(),
+            DefaultSwapchainFactory::new(),
+            &graphics_queue,
+            surface,
+            render_pass,
+        );
 
         Box::new(SimpleTriangleEventHandler{
             device,
-            surface,
             graphics_queue,
-            vertex_buffer,
-            render_pass,
             graphics_pipeline,
+            vertex_buffer,
             previous_frame_end,
-            swapchain_factory: DefaultSwapchainFactory::new(),
+            render_state,
         })
     }
+}
+
+#[derive(Default, Debug, Clone)]
+struct Vertex {
+    position: [f32; 2],
 }
 
 impl SimpleTriangleEventHandlerFactory {
@@ -227,47 +217,30 @@ impl SimpleTriangleEventHandlerFactory {
     }
 }
 
+struct SimpleTriangleEventHandler{
+    device: Arc<Device>,
+    graphics_queue: Arc<Queue>,
+    vertex_buffer: Arc<dyn BufferAccess + Send + Sync>,
+    graphics_pipeline: Arc<dyn GraphicsPipelineAbstract + Send + Sync>,
+    previous_frame_end: Option<Box<dyn GpuFuture>>,
+    render_state: RenderState,
+}
+
 impl AppEventHandler for SimpleTriangleEventHandler {
 
-    fn create_swapchain(&self) -> (Arc<Swapchain<Window>>, Vec<Arc<SwapchainImage<Window>>>) {
-        self.swapchain_factory.create_swapchain(
-            self.device.clone(),
-            &self.graphics_queue.clone(),
-            self.surface.clone(),
-        )
+    fn on_update(&mut self) {}
+
+    fn on_window_resize(&mut self, _width: u32, _height: u32) {
+       self.render_state.recreate()
     }
 
-    fn create_renderpass(&self) -> Arc<dyn RenderPassAbstract + Send + Sync> {
-        self.render_pass.clone()
-    }
+    fn on_redraw(&mut self) {
 
-    fn create_dynamic_state(&self) -> DynamicState {
-        DynamicState {
-            line_width: None,
-            viewports: None,
-            scissors: None,
-            compare_mask: None,
-            write_mask: None,
-            reference: None,
-        }
-    }
-
-    fn update(&self) {
-
-    }
-
-    fn render(
-        &mut self,
-        swapchain: Arc<Swapchain<Window>>,
-        acquire_future: SwapchainAcquireFuture<Window>,
-        image_num: usize,
-        framebuffer: Arc<dyn FramebufferAbstract + Send + Sync>,
-        dynamic_state: &DynamicState,
-    ) {
+        let (image_num, acquire_future, frame_buffer) = self.render_state.acquire_next_image();
 
         let command_buffer = self.create_command_buffer(
-            framebuffer,
-            dynamic_state,
+            frame_buffer,
+            &self.render_state.dynamic_state,
         );
 
         let future = self.previous_frame_end
@@ -276,7 +249,7 @@ impl AppEventHandler for SimpleTriangleEventHandler {
             .join(acquire_future)
             .then_execute(self.graphics_queue.clone(), command_buffer)
             .unwrap()
-            .then_swapchain_present(self.graphics_queue.clone(), swapchain.clone(), image_num)
+            .then_swapchain_present(self.graphics_queue.clone(), self.render_state.swapchain.clone(), image_num)
             .then_signal_fence_and_flush();
 
         match future {
@@ -284,7 +257,7 @@ impl AppEventHandler for SimpleTriangleEventHandler {
                 self.previous_frame_end = Some(future.boxed());
             }
             Err(FlushError::OutOfDate) => {
-                //render_state.recreate();
+                self.render_state.recreate();
                 self.previous_frame_end = Some(sync::now(self.device.clone()).boxed());
             }
             Err(e) => {
@@ -293,6 +266,8 @@ impl AppEventHandler for SimpleTriangleEventHandler {
             }
         }
     }
+
+    fn on_window_exit(&mut self) {}
 }
 
 impl SimpleTriangleEventHandler {

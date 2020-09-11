@@ -1,56 +1,39 @@
-
-use crate::logger;
-
 use std::sync::Arc;
 
-use winit::{
-    event::{
-        Event,
-        WindowEvent,
-    },
-    event_loop::{
-        ControlFlow,
-        EventLoop,
-    },
-    window::{
-        WindowBuilder,
-        Window,
-    },
-};
-
-use vulkano_win::VkSurfaceBuild;
+use winit::window::Window;
 
 use vulkano::{
     command_buffer::DynamicState,
     device::{
         Device,
-        Queue
+        Queue,
     },
     framebuffer::{
         Framebuffer,
         FramebufferAbstract,
-        RenderPassAbstract
+        RenderPassAbstract,
     },
-    image::SwapchainImage,
+    image::{
+        ImageUsage,
+        SwapchainImage
+    },
     instance::Instance,
     pipeline::viewport::Viewport,
     swapchain,
     swapchain::{
-        AcquireError,
-        SwapchainAcquireFuture,
+        ColorSpace,
+        FullscreenExclusive,
+        PresentMode,
         Surface,
+        SurfaceTransform,
         Swapchain,
+        SwapchainAcquireFuture,
     },
 };
 
-
-pub struct VulkanApp{
-    device: Arc<Device>,
-    queues: Vec<Arc<Queue>>,
-    surface: Arc<Surface<Window>>,
-    event_loop: EventLoop<()>,
-    update_frequency: UpdateFrequency,
-    event_handler_factory: Box<dyn AppEventHandlerFactory>,
+pub struct VulkanApp {
+    pub device: Arc<Device>,
+    pub queues: Vec<Arc<Queue>>,
 }
 
 pub trait InstanceFactory {
@@ -74,58 +57,112 @@ pub trait SwapchainFactory {
     ) -> (Arc<Swapchain<Window>>, Vec<Arc<SwapchainImage<Window>>>);
 }
 
-pub trait AppEventHandler {
-    fn create_swapchain(&self) -> (Arc<Swapchain<Window>>, Vec<Arc<SwapchainImage<Window>>>);
-    fn create_renderpass(&self) -> Arc<dyn RenderPassAbstract + Send + Sync>;
-    fn create_dynamic_state(&self) -> DynamicState;
-    fn update(&self);
-    fn render(
-        &mut self,
-        swapchain: Arc<Swapchain<Window>>,
-        acquire_future: SwapchainAcquireFuture<Window>,
-        image_num: usize,
-        framebuffer: Arc<dyn FramebufferAbstract + Send + Sync>,
-        dynamic_state: &DynamicState,
-    );
+// @TODO consider seperating device/queues and swapchain
+// since non-windowed vulkan apps are valid and may
+// be better for testing
+
+impl VulkanApp {
+    pub fn new(
+        instance_factory: Box<dyn InstanceFactory>,
+        device_factory: Box<dyn DeviceFactory>,
+        window: Window,
+    ) -> (VulkanApp, Arc<Surface<Window>>) {
+        let instance = instance_factory.create_instance();
+        let surface = vulkano_win::create_vk_surface(window, instance.clone()).unwrap();
+        let (device, queues) = device_factory.create_device(instance, surface.clone());
+
+        (VulkanApp {device, queues}, surface)
+    }
 }
 
-pub trait AppEventHandlerFactory {
-    fn create_event_handler(
+pub struct DefaultInstanceFactory{}
+
+impl DefaultInstanceFactory { pub fn new() -> Box<dyn InstanceFactory> {
+        Box::new(DefaultInstanceFactory{})
+    }
+}
+
+impl InstanceFactory for DefaultInstanceFactory {
+    // @TODO should take app info, extensions, layers
+    fn create_instance(&self) -> Arc<Instance> {
+
+        let extensions = vulkano_win::required_extensions();
+
+        Instance::new(None, &extensions, None).expect("failed to create Vulkan Instance")
+    }
+}
+
+pub struct DefaultSwapchainFactory{}
+
+impl DefaultSwapchainFactory { pub fn new() -> Box<dyn SwapchainFactory> {
+        Box::new(DefaultSwapchainFactory{})
+    }
+}
+
+impl SwapchainFactory for DefaultSwapchainFactory {
+    fn create_swapchain(
         &self,
         device: Arc<Device>,
-        queues: &Vec<Arc<Queue>>,
-        surface: Arc<Surface<Window>>,
-    ) -> Box<dyn AppEventHandler>;
+        queue: &Arc<Queue>,
+        surface: Arc<Surface<Window>>
+    ) -> (Arc<Swapchain<Window>>, Vec<Arc<SwapchainImage<Window>>>) {
+
+        let caps = surface.capabilities(device.physical_device()).expect("failsd to get surface capabilties");
+
+        let alpha = caps.supported_composite_alpha.iter().next().unwrap();
+        let format = caps.supported_formats[0].0;
+        let dimensions = surface.window().inner_size().into();
+
+        Swapchain::new(
+            device.clone(),
+            surface.clone(),
+            caps.min_image_count,
+            format,
+            dimensions,
+            1,
+            ImageUsage::color_attachment(),
+            queue,
+            SurfaceTransform::Identity,
+            alpha,
+            PresentMode::Fifo,
+            FullscreenExclusive::Default,
+            true,
+            ColorSpace::SrgbNonLinear,
+        )
+        .expect("failed to create swapchain")
+    }
 }
 
-pub enum UpdateFrequency {
-    /// appropriate for GUI/static apps
-    OnEvent,
-    /// appropriate for game type apps
-    Continuous,
-}
-
-struct RenderState {
-    swapchain: Arc<Swapchain<Window>>,
+pub struct RenderState {
+    pub swapchain: Arc<Swapchain<Window>>,
     framebuffers: Vec<Arc<dyn FramebufferAbstract + Send + Sync>>,
     surface: Arc<Surface<Window>>,
-    dynamic_state: DynamicState,
-    render_pass: Arc<dyn RenderPassAbstract + Send + Sync>,
+    pub dynamic_state: DynamicState,
+    pub render_pass: Arc<dyn RenderPassAbstract + Send + Sync>,
 }
 
 impl RenderState {
+
     pub fn new(
-        event_handler: &Box<dyn AppEventHandler>,
+        device: Arc<Device>,
+        swapchain_factory: Box<dyn SwapchainFactory>,
+        swapchain_queue: &Arc<Queue>,
         surface: Arc<Surface<Window>>,
+        render_pass: Arc<dyn RenderPassAbstract + Send + Sync>,
     ) -> RenderState {
 
-        let (swapchain, swapchain_images) = event_handler.create_swapchain();
+        let (swapchain, swapchain_images) = swapchain_factory.create_swapchain(device, &swapchain_queue, surface.clone());
 
-        let mut dynamic_state = event_handler.create_dynamic_state();
+        let mut dynamic_state = DynamicState {
+            line_width: None,
+            viewports: None,
+            scissors: None,
+            compare_mask: None,
+            write_mask: None,
+            reference: None,
+        };
 
-        let render_pass = event_handler.create_renderpass();
-
-        let framebuffers = VulkanApp::create_frame_buffers(
+        let framebuffers = RenderState::create_frame_buffers(
             render_pass.clone(),
             &mut dynamic_state,
             &swapchain_images,
@@ -147,7 +184,7 @@ impl RenderState {
 
         self.swapchain = swapchain;
 
-        self.framebuffers = VulkanApp::create_frame_buffers(
+        self.framebuffers = RenderState::create_frame_buffers(
             self.render_pass.clone(),
             &mut self.dynamic_state,
             &swapchain_images,
@@ -163,115 +200,28 @@ impl RenderState {
 
         swapchain.recreate_with_dimensions(dimensions).unwrap()
     }
-}
 
-impl VulkanApp {
+    pub fn acquire_next_image(&mut self)
+        -> (usize, SwapchainAcquireFuture<Window>, Arc<dyn FramebufferAbstract + Send + Sync>) {
 
-    pub fn new(
-        update_frequency: UpdateFrequency,
-        instance_factory: Box<dyn InstanceFactory>,
-        device_factory: Box<dyn DeviceFactory>,
-        event_handler_factory: Box<dyn AppEventHandlerFactory>) -> VulkanApp {
-        // @TODO - add configuration options for logger
-        logger::init();
-
-        let instance = instance_factory.create_instance();
-
-        let event_loop = EventLoop::new();
-
-        let surface = WindowBuilder::new().build_vk_surface(&event_loop, instance.clone()).unwrap();
-
-        let (device, queues) = device_factory
-            .create_device(instance.clone(), surface.clone());
-
-        VulkanApp {
-            device,
-            queues,
-            surface,
-            event_loop,
-            update_frequency,
-            event_handler_factory,
-        }
-    }
-
-    // @TODO this is to coupled betweeen vulkan stuff and
-    // winit stuff
-    // use events (ie init, on resize, on render...)
-    /// Blocks until Application is complete
-    pub fn run(self) {
-
-        let mut event_handler = self.event_handler_factory.create_event_handler(
-            self.device.clone(),
-            &self.queues,
-            self.surface.clone(),
-        );
-
-        let id = self.surface.window().id();
-
-        let mut render_state = RenderState::new(&event_handler, self.surface);
-
-        self.event_loop.run(move |event, _, control_flow| {
-
-            event_handler.update();
-
-            *control_flow = ControlFlow::Poll;
-
-            match event {
-                Event::WindowEvent {
-                    event: WindowEvent::CloseRequested,
-                    window_id
-                } if id == window_id => { *control_flow = ControlFlow::Exit; }
-                Event::WindowEvent {
-                    event: WindowEvent::Resized(_),
-                    window_id
-                } if id == window_id => {
-                    render_state.recreate();
-                }
-                Event::RedrawEventsCleared => {
-                    VulkanApp::render(
-                        &mut render_state,
-                        &mut event_handler
-                    );
-                }
-                _ => (),
-            }
-        });
-    }
-
-
-    fn render(
-        render_state: &mut RenderState,
-        event_handler: &mut Box<dyn AppEventHandler>,
-    ) {
-        // @TODO - rather then being in app create some type of swapchain abstraction
         let (image_num, suboptimal, acquire_future) =
 
-            match swapchain::acquire_next_image(render_state.swapchain.clone(), None) {
+            match swapchain::acquire_next_image(self.swapchain.clone(), None) {
                 Ok(r) => r,
-                Err(AcquireError::OutOfDate) => {
-                    render_state.recreate();
-                    return;
-                }
+                //                @TODO - this error needs to be passed on to event handler
+//                Err(AcquireError::OutOfDate) => {
+//                    self.recreate();
+//                }
                 Err(e) => panic!("Failed to acquire next image: {:?}", e),
             };
 
         if suboptimal {
-            render_state.recreate();
+            self.recreate();
         }
 
-        let framebuffer = render_state.framebuffers[image_num].clone();
+        let frame_buffer = self.framebuffers[image_num].clone();
 
-        // @TODO - this code below is not generic enough
-        // extract/assign responsibility better after
-        // doing a couple more examples and getting better understanding
-        // of what is common and what is distinct
-        event_handler.render(
-            render_state.swapchain.clone(),
-            acquire_future,
-            image_num,
-            framebuffer,
-            &render_state.dynamic_state,
-        );
+        (image_num, acquire_future, frame_buffer)
     }
 
     fn create_frame_buffers(
