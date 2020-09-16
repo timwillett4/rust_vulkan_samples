@@ -26,8 +26,6 @@ mod target_logger {
 
         log4rs::init_config(config)
             .expect("unable to initialize log");
-
-        info!("Log Successfully Inited");
     }
 }
 
@@ -44,8 +42,5 @@ mod target_logger {
         android_logger::init_once(
             Config::default()
                 .with_min_level(Level::Trace));
-
-
-        info!("Log Successfully Inited");
     }
 }

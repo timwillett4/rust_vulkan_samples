@@ -1,3 +1,5 @@
+#[macro_use] extern crate log;
+
 use vulkan_samples::{
         app::{
             App,
@@ -14,61 +16,65 @@ use vulkan_samples::{
         vulkan_device_factories::single_graphics_queue::SingleGraphicsQueueDeviceFactory,
 };
 
-use std::sync::Arc;
+use std::{
+        sync::Arc,
+        error::Error,
+};
 
 use winit::window::Window;
 
 use vulkano::{
-    buffer::{
-        BufferUsage,
-        CpuAccessibleBuffer,
-        BufferAccess
-    },
-    command_buffer::{
-        AutoCommandBufferBuilder,
-        CommandBuffer,
-        DynamicState
-    },
-    command_buffer::pool::standard::StandardCommandPoolAlloc,
-    device::{
-        Device,
-        Queue
-    },
-    format::Format,
-    framebuffer::{
-        Subpass,
-        FramebufferAbstract,
-        RenderPassAbstract,
-    },
-    image::SwapchainImage,
-    pipeline::{
-        GraphicsPipeline,
-        GraphicsPipelineAbstract,
-    },
-    sync,
-    sync::{FlushError, GpuFuture},
+        buffer::{
+            BufferUsage,
+            CpuAccessibleBuffer,
+            BufferAccess
+        },
+        command_buffer::{
+            AutoCommandBufferBuilder,
+            CommandBuffer,
+            DynamicState
+        },
+        command_buffer::pool::standard::StandardCommandPoolAlloc,
+        device::{
+            Device,
+            Queue
+        },
+        format::Format,
+        framebuffer::{
+            Subpass,
+            FramebufferAbstract,
+            RenderPassAbstract,
+            RenderPassCreationError,
+        },
+        pipeline::{
+            GraphicsPipeline,
+            GraphicsPipelineAbstract,
+        },
+        sync,
+        sync::{FlushError, GpuFuture},
 };
 
 #[cfg_attr(target_os = "android", ndk_glue::main(backtrace))]
 fn main() {
-    let app = App::new(
+    match  App::new(
         UpdateFrequency::Continuous,
         SimpleTriangleEventHandlerFactory::new(),
-    );
-
-    app.run();
+    ) {
+        Ok(app) => app.run(),
+        Err(e) => error!("{}", e),
+    }
 }
 
 struct SimpleTriangleEventHandlerFactory {}
 
 impl AppEventHandlerFactory for SimpleTriangleEventHandlerFactory {
 
-    fn create_event_handler(&self, window: Window) -> Box<dyn AppEventHandler> {
+    fn create_event_handler(&self, window: Window) -> Result<Box<dyn AppEventHandler>, Box<dyn Error>> {
         let (vulkan_app, surface) = VulkanApp::new(
             DefaultInstanceFactory::new(),
             SingleGraphicsQueueDeviceFactory::new(),
             window,
-        );
+        )?;
 
         let device = vulkan_app.device;
         // @TODO - this should actually check for first queue that supports graphics
@@ -80,7 +86,7 @@ impl AppEventHandlerFactory for SimpleTriangleEventHandlerFactory {
             caps.supported_formats[0].0
         };
 
-        let render_pass = SimpleTriangleEventHandlerFactory::create_renderpass(&device, surface_format);
+        let render_pass = SimpleTriangleEventHandlerFactory::create_renderpass(&device, surface_format)?;
 
         let graphics_pipeline = SimpleTriangleEventHandlerFactory::create_pipeline(&device, render_pass.clone());
 
@@ -95,16 +101,16 @@ impl AppEventHandlerFactory for SimpleTriangleEventHandlerFactory {
             &graphics_queue,
             surface,
             render_pass,
-        );
+        )?;
 
-        Box::new(SimpleTriangleEventHandler{
+        Ok(Box::new(SimpleTriangleEventHandler{
             device,
             graphics_queue,
             graphics_pipeline,
             vertex_buffer,
             previous_frame_end,
             render_state,
-        })
+        }))
     }
 }
 
@@ -123,28 +129,27 @@ impl SimpleTriangleEventHandlerFactory {
     fn create_renderpass(
         device: &Arc<Device>,
         format: Format,
-    ) -> Arc<dyn RenderPassAbstract + Send + Sync> {
+    ) -> Result<Arc<dyn RenderPassAbstract + Send + Sync>, RenderPassCreationError> {
 
-        Arc::new(
-            vulkano::single_pass_renderpass!(
-                device.clone(),
-                attachments: {
+        let render_pass = vulkano::single_pass_renderpass!(
+            device.clone(),
+            attachments: {
 
-                    color: {
-                        load: Clear,
-                        store: Store,
-                        format: format,
-                        samples: 1,
-                    }
-                },
-
-                pass: {
-                    color: [color],
-                    depth_stencil: {}
+                color: {
+                    load: Clear,
+                    store: Store,
+                    format: format,
+                    samples: 1,
                 }
-            )
-            .unwrap()
-        )
+            },
+
+            pass: {
+                color: [color],
+                depth_stencil: {}
+            }
+        )?;
+
+        Ok(Arc::new(render_pass))
     }
 
     fn create_pipeline(
@@ -230,13 +235,13 @@ impl AppEventHandler for SimpleTriangleEventHandler {
 
     fn on_update(&mut self) {}
 
-    fn on_window_resize(&mut self, _width: u32, _height: u32) {
+    fn on_window_resize(&mut self, _width: u32, _height: u32) -> Result<(), Box<dyn Error>> {
        self.render_state.recreate()
     }
 
-    fn on_redraw(&mut self) {
+    fn on_redraw(&mut self) -> Result<(), Box<dyn Error>> {
 
-        let (image_num, acquire_future, frame_buffer) = self.render_state.acquire_next_image();
+        let (image_num, acquire_future, frame_buffer) = self.render_state.acquire_next_image()?;
 
         let command_buffer = self.create_command_buffer(
             frame_buffer,
@@ -247,27 +252,30 @@ impl AppEventHandler for SimpleTriangleEventHandler {
             .take()
             .unwrap()
             .join(acquire_future)
-            .then_execute(self.graphics_queue.clone(), command_buffer)
-            .unwrap()
+            .then_execute(self.graphics_queue.clone(), command_buffer)?
             .then_swapchain_present(self.graphics_queue.clone(), self.render_state.swapchain.clone(), image_num)
             .then_signal_fence_and_flush();
 
         match future {
             Ok(future) => {
                 self.previous_frame_end = Some(future.boxed());
+                Ok(())
             }
             Err(FlushError::OutOfDate) => {
-                self.render_state.recreate();
+                // @TODO - this maybe neds to be handled better
+                self.render_state.recreate()?;
                 self.previous_frame_end = Some(sync::now(self.device.clone()).boxed());
+
+                Ok(())
             }
             Err(e) => {
-                println!("Failed to flush future: {:?}", e);
+                warn!("Failed to flush future: {:?}", e);
                 self.previous_frame_end = Some(sync::now(self.device.clone()).boxed());
+
+                Ok(())
             }
         }
     }
-
-    fn on_window_exit(&mut self) {}
 }
 
 impl SimpleTriangleEventHandler {

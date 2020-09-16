@@ -1,6 +1,9 @@
 use crate::vulkan_app::DeviceFactory;
 
-use std::sync::Arc;
+use std::{
+    sync::Arc,
+    error::Error,
+};
 
 use winit::window::Window;
 
@@ -33,7 +36,7 @@ impl DeviceFactory for SingleGraphicsQueueDeviceFactory {
         &self,
         instance: Arc<Instance>,
         surface: Arc<Surface<Window>>,
-    ) -> (Arc<Device>, Vec<Arc<Queue>>) {
+    ) -> Result<(Arc<Device>, Vec<Arc<Queue>>), Box<dyn Error>> {
 
         let (physical_device, queue_family) = {
             PhysicalDevice::enumerate(&instance).find_map(
@@ -49,9 +52,8 @@ impl DeviceFactory for SingleGraphicsQueueDeviceFactory {
                         Some(queue_family) => Some((physical_device, queue_family)),
                         None => None,
                     }
-            })
-            .expect("couldn't find a graphical queue family")
-        };
+            }).ok_or("Unable to find compatible device")
+        }?;
 
         let device_extensions = vulkano::device::DeviceExtensions {
             khr_swapchain: true,
@@ -63,11 +65,10 @@ impl DeviceFactory for SingleGraphicsQueueDeviceFactory {
             &Features::none(),
             &device_extensions,
             [(queue_family, 0.5)].iter().cloned()
-        )
-        .expect("failed to create logical device");
+        )?;
 
         let queues = queues.collect::<Vec<_>>();
 
-        (device, queues)
+        Ok((device, queues))
     }
 }

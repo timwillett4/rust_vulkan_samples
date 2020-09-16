@@ -1,3 +1,4 @@
+#[macro_export]
 #[macro_use] extern crate log;
 
 pub extern crate vulkano;

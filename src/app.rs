@@ -1,5 +1,7 @@
 pub use crate::logger;
 
+use std::error::Error;
+
 use winit::{
       event::{Event, WindowEvent},
       event_loop::{ControlFlow, EventLoop},
@@ -7,15 +9,14 @@ use winit::{
 };
 
 pub trait AppEventHandlerFactory {
-    fn create_event_handler(&self, window: Window) -> Box<dyn AppEventHandler>;
+    fn create_event_handler(&self, window: Window) -> Result<Box<dyn AppEventHandler>, Box<dyn Error>>;
 }
 
 pub trait AppEventHandler {
     /// (will only be run for continuos apps)
     fn on_update(&mut self) {}
-    fn on_window_resize(&mut self, width: u32, height: u32);
-    fn on_redraw(&mut self);
-    fn on_window_exit(&mut self);
+    fn on_window_resize(&mut self, width: u32, height: u32) -> Result<(), Box<dyn Error>>;
+    fn on_redraw(&mut self) -> Result<(), Box<dyn Error>>;
 }
 
 pub enum UpdateFrequency {
@@ -38,21 +39,22 @@ impl App {
     pub fn new(
         update_frequency: UpdateFrequency,
         event_handler_factory: Box<dyn AppEventHandlerFactory>,
-    ) -> App {
+    ) -> Result<App, Box<dyn Error>> {
+        // @TODO - add customizable paramaters?
         logger::init();
 
         let event_loop = EventLoop::new();
-        let window = WindowBuilder::new().build(&event_loop).unwrap();
+        let window = WindowBuilder::new().build(&event_loop)?;
         let window_id = window.id();
 
-        let event_handler = event_handler_factory.create_event_handler(window);
+        let event_handler = event_handler_factory.create_event_handler(window)?;
 
-        App {
+        Ok(App {
             update_frequency,
             window_id,
             event_loop,
             event_handler,
-        }
+        })
     }
 
     /// Blocks until Application is complete
@@ -72,22 +74,30 @@ impl App {
                 UpdateFrequency::OnEvent => ControlFlow::Wait,
             };
 
-            match event {
+            let result = match event {
                 Event::WindowEvent {
                     event,
                     window_id,
                 } if window_id == my_window_id => {
                     match event {
                         WindowEvent::CloseRequested => {
-                            event_handler.on_window_exit();
                             *control_flow = ControlFlow::Exit;
-                        }
+                            Ok(())
+                        },
                         WindowEvent::Resized(size) => event_handler.on_window_resize(size.width, size.height),
-                        _ => ()
+                        _ => Ok(())
                     }
                 }
                 Event::RedrawEventsCleared => event_handler.on_redraw(),
-                _ => (),
+                _ => Ok(()),
+            };
+
+            match result {
+                Ok(()) => (),
+                Err(e) => {
+                    error!("{}", e);
+                    *control_flow = ControlFlow::Exit;
+                },
             }
         });
     }

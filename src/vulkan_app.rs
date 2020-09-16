@@ -1,4 +1,7 @@
-use std::sync::Arc;
+use std::{
+    sync::Arc,
+    error::Error,
+};
 
 use winit::window::Window;
 
@@ -11,11 +14,12 @@ use vulkano::{
     framebuffer::{
         Framebuffer,
         FramebufferAbstract,
+        FramebufferCreationError,
         RenderPassAbstract,
     },
     image::{
         ImageUsage,
-        SwapchainImage
+        SwapchainImage,
     },
     instance::Instance,
     pipeline::viewport::Viewport,
@@ -28,6 +32,7 @@ use vulkano::{
         SurfaceTransform,
         Swapchain,
         SwapchainAcquireFuture,
+        SwapchainCreationError,
     },
 };
 
@@ -45,7 +50,7 @@ pub trait DeviceFactory{
         &self,
         instance: Arc<Instance>,
         surface: Arc<Surface<Window>>,
-    ) -> (Arc<Device>, Vec<Arc<Queue>>);
+    ) -> Result<(Arc<Device>, Vec<Arc<Queue>>), Box<dyn Error>>;
 }
 
 pub trait SwapchainFactory {
@@ -54,24 +59,21 @@ pub trait SwapchainFactory {
         device: Arc<Device>,
         queue: &Arc<Queue>,
         surface: Arc<Surface<Window>>,
-    ) -> (Arc<Swapchain<Window>>, Vec<Arc<SwapchainImage<Window>>>);
+    ) -> Result<(Arc<Swapchain<Window>>, Vec<Arc<SwapchainImage<Window>>>), SwapchainCreationError>;
 }
 
-// @TODO consider seperating device/queues and swapchain
-// since non-windowed vulkan apps are valid and may
-// be better for testing
-
 impl VulkanApp {
-    pub fn new(
+    // @TODO - have constructor for non-windowed vulkan apps
+    pub fn new (
         instance_factory: Box<dyn InstanceFactory>,
         device_factory: Box<dyn DeviceFactory>,
         window: Window,
-    ) -> (VulkanApp, Arc<Surface<Window>>) {
+    ) -> Result<(VulkanApp, Arc<Surface<Window>>), Box<dyn Error>> {
         let instance = instance_factory.create_instance();
-        let surface = vulkano_win::create_vk_surface(window, instance.clone()).unwrap();
-        let (device, queues) = device_factory.create_device(instance, surface.clone());
+        let surface = vulkano_win::create_vk_surface(window, instance.clone())?;
+        let (device, queues) = device_factory.create_device(instance, surface.clone())?;
 
-        (VulkanApp {device, queues}, surface)
+        Ok((VulkanApp {device, queues}, surface))
     }
 }
 
@@ -105,11 +107,17 @@ impl SwapchainFactory for DefaultSwapchainFactory {
         device: Arc<Device>,
         queue: &Arc<Queue>,
         surface: Arc<Surface<Window>>
-    ) -> (Arc<Swapchain<Window>>, Vec<Arc<SwapchainImage<Window>>>) {
+    ) -> Result<(Arc<Swapchain<Window>>, Vec<Arc<SwapchainImage<Window>>>), SwapchainCreationError> {
 
         let caps = surface.capabilities(device.physical_device()).expect("failsd to get surface capabilties");
 
-        let alpha = caps.supported_composite_alpha.iter().next().unwrap();
+        let alpha = caps
+            .supported_composite_alpha
+            .iter()
+            .next()
+            .ok_or(SwapchainCreationError::UnsupportedCompositeAlpha)?;
+
+        // @TODO first or
         let format = caps.supported_formats[0].0;
         let dimensions = surface.window().inner_size().into();
 
@@ -129,7 +137,6 @@ impl SwapchainFactory for DefaultSwapchainFactory {
             true,
             ColorSpace::SrgbNonLinear,
         )
-        .expect("failed to create swapchain")
     }
 }
 
@@ -149,9 +156,9 @@ impl RenderState {
         swapchain_queue: &Arc<Queue>,
         surface: Arc<Surface<Window>>,
         render_pass: Arc<dyn RenderPassAbstract + Send + Sync>,
-    ) -> RenderState {
+    ) -> Result<RenderState, Box<dyn Error>> {
 
-        let (swapchain, swapchain_images) = swapchain_factory.create_swapchain(device, &swapchain_queue, surface.clone());
+        let (swapchain, swapchain_images) = swapchain_factory.create_swapchain(device, &swapchain_queue, surface.clone())?;
 
         let mut dynamic_state = DynamicState {
             line_width: None,
@@ -166,43 +173,46 @@ impl RenderState {
             render_pass.clone(),
             &mut dynamic_state,
             &swapchain_images,
-        );
+        )?;
 
-        RenderState {
+        Ok(RenderState {
             swapchain,
             framebuffers,
             surface,
             dynamic_state,
             render_pass,
-        }
+        })
     }
 
     pub fn recreate(
         &mut self,
-    ) {
-        let (swapchain, swapchain_images) = RenderState::recreate_swapchain(self.swapchain.clone(), self.surface.clone());
+    ) -> Result<(), Box<dyn Error>>{
+        let (swapchain, swapchain_images) = RenderState::recreate_swapchain(self.swapchain.clone(), self.surface.clone())?;
 
-        self.swapchain = swapchain;
-
-        self.framebuffers = RenderState::create_frame_buffers(
+        let framebufers = RenderState::create_frame_buffers(
             self.render_pass.clone(),
             &mut self.dynamic_state,
             &swapchain_images,
-        );
+        )?;
+
+        self.swapchain = swapchain;
+        self.framebuffers = framebufers;
+
+        Ok(())
     }
 
     fn recreate_swapchain(
         swapchain: Arc<Swapchain<Window>>,
         surface: Arc<Surface<Window>>
-    ) -> (Arc<Swapchain<Window>>, Vec<Arc<SwapchainImage<Window>>>) {
+    ) -> Result<(Arc<Swapchain<Window>>, Vec<Arc<SwapchainImage<Window>>>), SwapchainCreationError> {
 
         let dimensions: [u32; 2] = surface.window().inner_size().into();
 
-        swapchain.recreate_with_dimensions(dimensions).unwrap()
+        swapchain.recreate_with_dimensions(dimensions)
     }
 
     pub fn acquire_next_image(&mut self)
-        -> (usize, SwapchainAcquireFuture<Window>, Arc<dyn FramebufferAbstract + Send + Sync>) {
+        -> Result<(usize, SwapchainAcquireFuture<Window>, Arc<dyn FramebufferAbstract + Send + Sync>), Box<dyn Error>> {
 
         let (image_num, suboptimal, acquire_future) =
 
@@ -216,19 +226,20 @@ impl RenderState {
             };
 
         if suboptimal {
-            self.recreate();
+            self.recreate()?;
         }
 
         let frame_buffer = self.framebuffers[image_num].clone();
 
-        (image_num, acquire_future, frame_buffer)
+        Ok((image_num, acquire_future, frame_buffer))
     }
+
 
     fn create_frame_buffers(
         render_pass: Arc<dyn RenderPassAbstract + Send + Sync>,
         dynamic_state: &mut DynamicState,
         swapchain_images: &Vec<Arc<SwapchainImage<Window>>>,
-    ) -> Vec<Arc<dyn FramebufferAbstract + Send + Sync>> {
+    ) -> Result<Vec<Arc<dyn FramebufferAbstract + Send + Sync>>, FramebufferCreationError> {
 
         let dimensions = swapchain_images[0].dimensions();
 
@@ -240,17 +251,32 @@ impl RenderState {
 
         dynamic_state.viewports = Some(vec![viewport]);
 
-        swapchain_images
+        type ArcFramebuffer = Arc<dyn FramebufferAbstract + Send + Sync>;
+        type FramebufferResult = Result<ArcFramebuffer, FramebufferCreationError>;
+
+        let framebuffer_results = swapchain_images
             .iter()
-            .map(|image| {
-                Arc::new(
-                    Framebuffer::start(render_pass.clone())
-                    .add(image.clone())
-                    .unwrap()
-                    .build()
-                    .unwrap(),
-                ) as Arc<dyn FramebufferAbstract + Send + Sync>
-            })
-            .collect::<Vec<_>>()
+            .map(|image| -> FramebufferResult {
+                    let framebuffer = Framebuffer::start(render_pass.clone())
+                    .add(image.clone())?
+                    .build()?;
+
+                    Ok(Arc::new(framebuffer) as ArcFramebuffer)
+            });
+
+        // @TODO - this should be some kind of utility function since it is likely
+        // to have genric use case (ResultFlatMap??)
+        let first_error = framebuffer_results.clone().find(|result| result.is_err());
+
+        match first_error {
+            Some(Err(first_error)) => Err(first_error),
+            None => Ok(framebuffer_results.map(|result| result.expect("This should never happen")).collect::<Vec<_>>()),
+            _ => unreachable!("Unexpected error occurd"),
+        }
     }
 }
+
+//#[cfg(test)]
+//mod tests {
+//
+//}
