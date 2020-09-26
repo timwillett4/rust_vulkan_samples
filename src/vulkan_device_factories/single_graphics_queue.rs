@@ -38,7 +38,7 @@ impl DeviceFactory for SingleGraphicsQueueDeviceFactory {
         surface: Arc<Surface<Window>>,
     ) -> Result<(Arc<Device>, Vec<Arc<Queue>>), Box<dyn Error>> {
 
-        let (physical_device, queue_family) = {
+        let (physical_device, compatible_graphics_queue_family) = {
             PhysicalDevice::enumerate(&instance).find_map(
                 |physical_device| -> Option<(PhysicalDevice, QueueFamily)> {
 
@@ -64,7 +64,7 @@ impl DeviceFactory for SingleGraphicsQueueDeviceFactory {
             physical_device,
             &Features::none(),
             &device_extensions,
-            [(queue_family, 0.5)].iter().cloned()
+            [(compatible_graphics_queue_family, 0.5)].iter().cloned()
         )?;
 
         let queues = queues.collect::<Vec<_>>();

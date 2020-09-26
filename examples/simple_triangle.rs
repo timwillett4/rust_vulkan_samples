@@ -46,6 +46,7 @@ use vulkano::{
             RenderPassAbstract,
             RenderPassCreationError,
         },
+        memory::DeviceMemoryAllocError,
         pipeline::{
             GraphicsPipeline,
             GraphicsPipelineAbstract,
@@ -77,20 +78,20 @@ impl AppEventHandlerFactory for SimpleTriangleEventHandlerFactory {
         )?;
 
         let device = vulkan_app.device;
-        // @TODO - this should actually check for first queue that supports graphics
-        let graphics_queue = vulkan_app.queues[0].clone();
+
+        let graphics_queue = vulkan_app.queues.get(0).ok_or("Device has no available queues")?.clone();
 
         let surface_format = {
-            let caps = surface.capabilities(device.physical_device()).expect("failed to get surface capabilties");
+            let caps = surface.capabilities(device.physical_device())?;
 
             caps.supported_formats[0].0
         };
 
         let render_pass = SimpleTriangleEventHandlerFactory::create_renderpass(&device, surface_format)?;
 
-        let graphics_pipeline = SimpleTriangleEventHandlerFactory::create_pipeline(&device, render_pass.clone());
+        let graphics_pipeline = SimpleTriangleEventHandlerFactory::create_pipeline(&device, render_pass.clone())?;
 
-        let vertex_buffer = SimpleTriangleEventHandlerFactory::create_vertex_buffer(&device);
+        let vertex_buffer = SimpleTriangleEventHandlerFactory::create_vertex_buffer(&device)?;
 
         let previous_frame_end = Some(sync::now(device.clone()).boxed());
 
@@ -155,7 +156,7 @@ impl SimpleTriangleEventHandlerFactory {
     fn create_pipeline(
         device: &Arc<Device>,
         render_pass: Arc<dyn RenderPassAbstract + Send + Sync>
-    ) -> Arc<dyn GraphicsPipelineAbstract + Send + Sync> {
+    ) -> Result<Arc<dyn GraphicsPipelineAbstract + Send + Sync>, Box<dyn Error>> {
 
         mod vs {
             vulkano_shaders::shader!{
@@ -187,26 +188,25 @@ impl SimpleTriangleEventHandlerFactory {
             }
         }
 
-        let vs = vs::Shader::load(device.clone()).expect("failed to create shader module");
-        let fs = fs::Shader::load(device.clone()).expect("failed to create shader module");
+        let vs = vs::Shader::load(device.clone())?;
+        let fs = fs::Shader::load(device.clone())?;
 
-        Arc::new(
-            GraphicsPipeline::start()
-                .vertex_input_single_buffer::<Vertex>()
-                .vertex_shader(vs.main_entry_point(), ())
-                .viewports_dynamic_scissors_irrelevant(1)
-                .fragment_shader(fs.main_entry_point(), ())
-                .render_pass(Subpass::from(render_pass, 0).unwrap())
-                .build(device.clone())
-                .unwrap()
-        )
+        let subpass = Subpass::from(render_pass, 0).ok_or("Unable to build subpass")?;
+
+        Ok(Arc::new(GraphicsPipeline::start()
+            .vertex_input_single_buffer::<Vertex>()
+            .vertex_shader(vs.main_entry_point(), ())
+            .viewports_dynamic_scissors_irrelevant(1)
+            .fragment_shader(fs.main_entry_point(), ())
+            .render_pass(subpass)
+            .build(device.clone())?))
     }
 
-    fn create_vertex_buffer(device: &Arc<Device>) -> Arc<dyn BufferAccess + Send + Sync> {
+    fn create_vertex_buffer(device: &Arc<Device>) -> Result<Arc<dyn BufferAccess + Send + Sync>, DeviceMemoryAllocError> {
 
         vulkano::impl_vertex!(Vertex, position);
 
-        CpuAccessibleBuffer::from_iter(
+        Ok(Arc::new(CpuAccessibleBuffer::from_iter(
             device.clone(),
             BufferUsage::all(),
             false,
@@ -217,8 +217,7 @@ impl SimpleTriangleEventHandlerFactory {
             ]
             .iter()
             .cloned(),
-        )
-        .unwrap()
+        )?))
     }
 }
 
@@ -246,11 +245,11 @@ impl AppEventHandler for SimpleTriangleEventHandler {
         let command_buffer = self.create_command_buffer(
             frame_buffer,
             &self.render_state.dynamic_state,
-        );
+        )?;
 
         let future = self.previous_frame_end
             .take()
-            .unwrap()
+            .expect("Previous frame end should never be none")
             .join(acquire_future)
             .then_execute(self.graphics_queue.clone(), command_buffer)?
             .then_swapchain_present(self.graphics_queue.clone(), self.render_state.swapchain.clone(), image_num)
@@ -262,7 +261,7 @@ impl AppEventHandler for SimpleTriangleEventHandler {
                 Ok(())
             }
             Err(FlushError::OutOfDate) => {
-                // @TODO - this maybe neds to be handled better
+                // @TODO -
                 self.render_state.recreate()?;
                 self.previous_frame_end = Some(sync::now(self.device.clone()).boxed());
 
@@ -284,30 +283,26 @@ impl SimpleTriangleEventHandler {
         &self,
         framebuffer: Arc<dyn FramebufferAbstract + Send + Sync>,
         dynamic_state: &DynamicState,
-    ) -> impl CommandBuffer<PoolAlloc = StandardCommandPoolAlloc> {
+    ) -> Result<impl CommandBuffer<PoolAlloc = StandardCommandPoolAlloc>, Box<dyn Error>> {
 
         let clear_values = vec![[0.0, 0.0, 1.0, 1.0].into()];
 
         let mut builder = AutoCommandBufferBuilder::primary_one_time_submit(
             self.device.clone(),
             self.graphics_queue.family(),
-        )
-        .unwrap();
+        )?;
 
         builder.
-            begin_render_pass(framebuffer, false, clear_values)
-            .unwrap()
+            begin_render_pass(framebuffer, false, clear_values)?
             .draw(
                 self.graphics_pipeline.clone(),
                 &dynamic_state,
                 vec![self.vertex_buffer.clone()],
                 (),
                 (),
-            )
-            .unwrap()
-            .end_render_pass()
-            .unwrap();
+            )?
+            .end_render_pass()?;
 
-        builder.build().unwrap()
+        Ok(builder.build()?)
     }
 }

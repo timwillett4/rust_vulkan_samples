@@ -117,8 +117,12 @@ impl SwapchainFactory for DefaultSwapchainFactory {
             .next()
             .ok_or(SwapchainCreationError::UnsupportedCompositeAlpha)?;
 
-        // @TODO first or
-        let format = caps.supported_formats[0].0;
+        let format = caps
+            .supported_formats
+            .get(0)
+            .ok_or(SwapchainCreationError::UnsupportedCompositeAlpha)?
+            .0;
+
         let dimensions = surface.window().inner_size().into();
 
         Swapchain::new(
