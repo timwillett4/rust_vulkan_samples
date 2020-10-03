@@ -37,7 +37,7 @@ mod target_logger {
     use log::Level;
     use android_logger::Config;
 
-    pub fn init_logger() {
+    pub fn init() {
 
         android_logger::init_once(
             Config::default()
