@@ -25,6 +25,7 @@ use vulkano::{
     pipeline::viewport::Viewport,
     swapchain,
     swapchain::{
+        AcquireError,
         ColorSpace,
         FullscreenExclusive,
         PresentMode,
@@ -88,9 +89,20 @@ impl InstanceFactory for DefaultInstanceFactory {
     // @TODO should take app info, extensions, layers
     fn create_instance(&self) -> Arc<Instance> {
 
+        let available = vulkano::instance::layers_list().unwrap();
+        debug!("Available Count: {}", available.count());
+
+        let available = vulkano::instance::layers_list().unwrap();
+        available.for_each(|layer| info!("available_extensions: {}", layer.name()));
+
         let extensions = vulkano_win::required_extensions();
 
-        Instance::new(None, &extensions, None).expect("failed to create Vulkan Instance")
+        debug!("required_extensions: {:?}", extensions);
+
+        match Instance::new(None, &extensions, None) {
+            Ok(instance) => instance,
+            Err(err) => panic!("failed to create Vulkan Instance {:?}", err),
+        }
     }
 }
 
@@ -144,6 +156,13 @@ impl SwapchainFactory for DefaultSwapchainFactory {
     }
 }
 
+pub struct AcquiredImage {
+    pub image_num: usize,
+    pub acquire_future: SwapchainAcquireFuture<Window>,
+    pub framebuffer: Arc<dyn FramebufferAbstract + Send + Sync>,
+    pub suboptimal: bool
+}
+
 pub struct RenderState {
     pub swapchain: Arc<Swapchain<Window>>,
     framebuffers: Vec<Arc<dyn FramebufferAbstract + Send + Sync>>,
@@ -191,7 +210,8 @@ impl RenderState {
     pub fn recreate(
         &mut self,
     ) -> Result<(), Box<dyn Error>>{
-        let (swapchain, swapchain_images) = RenderState::recreate_swapchain(self.swapchain.clone(), self.surface.clone())?;
+        let (swapchain, swapchain_images) =
+            RenderState::recreate_swapchain(self.swapchain.clone(), self.surface.clone())?;
 
         let framebufers = RenderState::create_frame_buffers(
             self.render_pass.clone(),
@@ -214,30 +234,6 @@ impl RenderState {
 
         swapchain.recreate_with_dimensions(dimensions)
     }
-
-    pub fn acquire_next_image(&mut self)
-        -> Result<(usize, SwapchainAcquireFuture<Window>, Arc<dyn FramebufferAbstract + Send + Sync>), Box<dyn Error>> {
-
-        let (image_num, suboptimal, acquire_future) =
-
-            match swapchain::acquire_next_image(self.swapchain.clone(), None) {
-                Ok(r) => r,
-                //                @TODO - this error needs to be passed on to event handler
-//                Err(AcquireError::OutOfDate) => {
-//                    self.recreate();
-//                }
-                Err(e) => panic!("Failed to acquire next image: {:?}", e),
-            };
-
-        if suboptimal {
-            self.recreate()?;
-        }
-
-        let frame_buffer = self.framebuffers[image_num].clone();
-
-        Ok((image_num, acquire_future, frame_buffer))
-    }
-
 
     fn create_frame_buffers(
         render_pass: Arc<dyn RenderPassAbstract + Send + Sync>,
@@ -275,12 +271,19 @@ impl RenderState {
         match first_error {
             Some(Err(first_error)) => Err(first_error),
             None => Ok(framebuffer_results.map(|result| result.expect("This should never happen")).collect::<Vec<_>>()),
-            _ => unreachable!("Unexpected error occurd"),
+            _ => unreachable!("Unexpected error occured"),
         }
+    }
+
+    pub fn acquire_next_image(&mut self)
+        -> Result<AcquiredImage, AcquireError> {
+
+        let (image_num, suboptimal, acquire_future) =
+            swapchain::acquire_next_image(self.swapchain.clone(), None)?;
+
+        let framebuffer = self.framebuffers[image_num].clone();
+
+        Ok(AcquiredImage{image_num, acquire_future, framebuffer, suboptimal})
     }
 }
 
-//#[cfg(test)]
-//mod tests {
-//
-//}

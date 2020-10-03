@@ -19,6 +19,7 @@ use vulkan_samples::{
 use std::{
         sync::Arc,
         error::Error,
+        any::Any,
 };
 
 use winit::window::Window;
@@ -53,6 +54,7 @@ use vulkano::{
         },
         sync,
         sync::{FlushError, GpuFuture},
+        swapchain::{SwapchainCreationError, AcquireError},
 };
 
 #[cfg_attr(target_os = "android", ndk_glue::main(backtrace))]
@@ -111,6 +113,7 @@ impl AppEventHandlerFactory for SimpleTriangleEventHandlerFactory {
             vertex_buffer,
             previous_frame_end,
             render_state,
+            recreate_render_state: false,
         }))
     }
 }
@@ -228,6 +231,7 @@ struct SimpleTriangleEventHandler{
     graphics_pipeline: Arc<dyn GraphicsPipelineAbstract + Send + Sync>,
     previous_frame_end: Option<Box<dyn GpuFuture>>,
     render_state: RenderState,
+    recreate_render_state: bool,
 }
 
 impl AppEventHandler for SimpleTriangleEventHandler {
@@ -235,24 +239,48 @@ impl AppEventHandler for SimpleTriangleEventHandler {
     fn on_update(&mut self) {}
 
     fn on_window_resize(&mut self, _width: u32, _height: u32) -> Result<(), Box<dyn Error>> {
-       self.render_state.recreate()
+        self.recreate_render_state = true;
+        Ok(())
     }
 
     fn on_redraw(&mut self) -> Result<(), Box<dyn Error>> {
 
-        let (image_num, acquire_future, frame_buffer) = self.render_state.acquire_next_image()?;
+        self.previous_frame_end.as_mut().unwrap().cleanup_finished();
+
+        if self.recreate_render_state {
+            match self.render_state.recreate() {
+                Ok(()) => self.recreate_render_state = false,
+                Err(e) => match e.downcast_ref::<SwapchainCreationError>() {
+                    // Return okay to indicate non-fatal error
+                    Some(SwapchainCreationError::UnsupportedDimensions) => return Ok(()),
+                    _ => return Err(e),
+                },
+                Err(e) => return Err(e),
+            };
+        };
+
+        let next_image_result = match self.render_state.acquire_next_image() {
+            Ok(result) => result,
+            Err(AcquireError::OutOfDate) => {
+                self.recreate_render_state = true;
+                return Ok(());
+            },
+            Err(e) => return Err(Box::new(e)),
+        };
+
+        self.recreate_render_state = next_image_result.suboptimal;
 
         let command_buffer = self.create_command_buffer(
-            frame_buffer,
+            next_image_result.framebuffer,
             &self.render_state.dynamic_state,
         )?;
 
         let future = self.previous_frame_end
             .take()
             .expect("Previous frame end should never be none")
-            .join(acquire_future)
+            .join(next_image_result.acquire_future)
             .then_execute(self.graphics_queue.clone(), command_buffer)?
-            .then_swapchain_present(self.graphics_queue.clone(), self.render_state.swapchain.clone(), image_num)
+            .then_swapchain_present(self.graphics_queue.clone(), self.render_state.swapchain.clone(), next_image_result.image_num)
             .then_signal_fence_and_flush();
 
         match future {
@@ -261,8 +289,9 @@ impl AppEventHandler for SimpleTriangleEventHandler {
                 Ok(())
             }
             Err(FlushError::OutOfDate) => {
-                // @TODO -
-                self.render_state.recreate()?;
+
+                warn!("Present future error: 'FlushError::OutOfDate'");
+                self.recreate_render_state = true;
                 self.previous_frame_end = Some(sync::now(self.device.clone()).boxed());
 
                 Ok(())
