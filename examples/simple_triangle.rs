@@ -19,7 +19,6 @@ use vulkan_samples::{
 use std::{
         sync::Arc,
         error::Error,
-        any::Any,
 };
 
 use winit::window::Window;
@@ -255,7 +254,6 @@ impl AppEventHandler for SimpleTriangleEventHandler {
                     Some(SwapchainCreationError::UnsupportedDimensions) => return Ok(()),
                     _ => return Err(e),
                 },
-                Err(e) => return Err(e),
             };
         };
 
