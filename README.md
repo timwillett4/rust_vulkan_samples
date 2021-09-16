@@ -77,7 +77,7 @@ If you get errors when signing package you likely need to update jdk to latest v
 
      Chocolatey: choco install openjdk
 ## __Clippy (optional)__
-Clippy is a helpful rust liner that can be installed as follows:
+Clippy is a helpful rust linter that can be installed as follows:
 <!-- -->
     'rustup component add clippy-preview'
     (use rustup component list to see up to date name)
